@@ -1,11 +1,11 @@
 # config.py
 
-from dataclasses import dataclass, field
 import os
 import json
 from pathlib import Path
+from dataclasses import dataclass, field
+
 import openai
-from config import settings
 
 @dataclass
 class Settings:
@@ -18,19 +18,17 @@ class Settings:
     refine_search: bool = True
     use_headless_browser: bool = False
     embedding_model: str = "text-embedding-3-large"
-    llm_model: str = "gpt-4o-mini"
+    llm_model: str = "gpt-4.1"
     chunk_size: int = 800
     chunk_overlap: int = 100
 
+# instantiate settings once
 settings = Settings()
-
-# ——————————————————————————————————————————————————————————————————————————
-# Project‐scoped vector store creation & persistence
 
 def get_store_ids(project: str) -> dict[str,str]:
     """
     Ensure there's a store_ids.json under the project folder containing
-    real OpenAI vector store IDs (beginning with 'vs_'). If missing, create
+    valid OpenAI vector store IDs (beginning with 'vs_'). If missing, create
     two new stores via the API and save them.
     """
     workdir = Path(project)
@@ -42,7 +40,7 @@ def get_store_ids(project: str) -> dict[str,str]:
     if sid_file.exists():
         return json.loads(sid_file.read_text())
 
-    # Create two vector stores: abstracts & pdfs (only 'name' is required)
+    # Create the vector stores (name only; description not supported)
     abstracts_vs = client.vector_stores.create(
         name=f"{project}-abstracts"
     ).id
