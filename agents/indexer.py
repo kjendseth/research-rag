@@ -4,6 +4,7 @@ import os
 import json
 import hashlib
 import openai
+import io
 import pypdf
 import tiktoken
 from tqdm import tqdm
@@ -44,20 +45,32 @@ def embed(chunks: list[str]) -> list[list[float]]:
 
 def index_abstracts(df, vstore_id: str):
     """
-    Upload all (doi, abstract) records as one file,
+    Upload all (doi, abstract) records as one JSON file,
     then register it with the abstract vector store.
     """
+    # Prepare JSON data
     data = [
         {"doi": row.doi, "abstract": row.abstract}
         for row in df.itertuples()
         if getattr(row, "doi", None)
     ]
-    file_id = client.files.create(
-        file=json.dumps(data), purpose="vector-store"
-    ).id
-    client.vector_stores.files.create(vstore_id, file_id=file_id)
-    print(f"✓ Uploaded {len(data)} abstracts to store {vstore_id}")
+    raw = json.dumps(data).encode("utf-8")
 
+    # Wrap in a BytesIO so OpenAI client accepts it
+    file_obj = io.BytesIO(raw)
+    file_obj.name = "abstracts.json"
+
+    # Upload to OpenAI
+    resp = client.files.create(
+        file=file_obj,
+        purpose="vector-store"
+    )
+    file_id = resp.id
+
+    # Link that file into your vector store
+    client.vector_stores.files.create(vstore_id, file_id=file_id)
+    print(f"✓ Uploaded {len(data)} abstracts to store {vstore_id} (file_id={file_id})")
+    
 def index_pdf(pdf_path: str, vstore_id: str):
     """
     Read the PDF, chunk it, dedupe by SHA256, embed and store.
