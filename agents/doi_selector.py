@@ -35,11 +35,13 @@ def run(question: str, abstract_store_id: str, k: int = 8) -> list[str]:
             {"role": "user",   "content": question}
         ],
         tools=[{"type": "file_search"}],
-        tool_choice={"type": "file_search"},
-        tool_resources={"file_search": {"vector_store_ids": [abstract_store_id], "max_num_results": k}},
+        tool_choice="file_search",                 # <‑‑ require a search
+        file_search={                             # <‑‑ NEW (top‑level)
+            "vector_store_ids": [abstract_store_id],
+            "max_num_results": k
+        },
         functions=[_FN_SCHEMA],
         function_call={"name": "select_dois"}
     )
-
     args = json.loads(resp.choices[0].message.function_call.arguments)
     return args["dois"]
