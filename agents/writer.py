@@ -10,7 +10,7 @@ def write_summary(question: str, store_id: str) -> str:
     """
     system = (
         "You are a biochemical reviewer. Answer in up to 500 words, "
-        "structured with headings (Introduction, Methods, Gaps). "
+        "combine information from multiple sources and keep track of the information origin DOI "
         "When citing papers, include inline DOIs like (doi:10.xxxx)."
     )
 
