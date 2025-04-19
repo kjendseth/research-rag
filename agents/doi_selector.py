@@ -24,7 +24,7 @@ def run(question: str, abstract_store_id: str, k: int = 8) -> list[str]:
         instructions=_SYSTEM,
         tools=[{
             "type": "file_search",
-            "vector_store_id": abstract_store_id,
+            "vector_store_ids": [abstract_store_id],
             "max_num_results": k
         }]
     )
