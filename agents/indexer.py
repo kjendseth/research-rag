@@ -1,139 +1,102 @@
 # agents/indexer.py
 
 import os
+import io
 import json
 import hashlib
 import openai
-import io
-#import pypdf
-from pypdf import PdfReader, errors as pdf_errors
-import tiktoken
-from tqdm import tqdm
-from config import settings
 from pathlib import Path
+from config import settings
 
 # Initialize OpenAI client
 client = openai.OpenAI(api_key=settings.openai_api_key)
 
-# Tokenizer for chunking
-_tkm = tiktoken.get_encoding("cl100k_base")
-
-# Local manifest to dedupe PDF embeddings by hash
-_MANIFEST = ".pdf_manifest.json"
-
-def _load_manifest():
-    if os.path.exists(_MANIFEST):
-        return json.load(open(_MANIFEST))
-    return {}
-
-def _save_manifest(m):
-    json.dump(m, open(_MANIFEST, "w"))
-
-def chunk_text(text: str) -> list[str]:
-    """Split large text into overlapping chunks."""
-    toks = _tkm.encode(text)
-    size, ov = settings.chunk_size, settings.chunk_overlap
-    return [
-        _tkm.decode(toks[i : i + size])
-        for i in range(0, len(toks), size - ov)
-    ]
-
-def embed(chunks: list[str]) -> list[list[float]]:
-    """Call OpenAI to get embeddings for each chunk."""
-    resp = client.embeddings.create(
-        input=chunks, model=settings.embedding_model
-    )
-    return [d.embedding for d in resp.data]
+# Manifest filenames
+_ABSTRACT_MANIFEST_PREFIX = ".abstract_manifest_"
+_PDF_MANIFEST = ".pdf_manifest.json"
 
 def index_abstracts(df, vstore_id: str):
     """
-    Upload all (doi, abstract) records as one JSON file (as user_data),
-    then register it with the abstract vector store.
+    Incrementally upload only *new* abstracts to the vector store.
+    Keeps a local manifest of seen DOIs under
+    .abstract_manifest_<vstore_id>.json
     """
-    data = [
-        {"doi": row.doi, "abstract": row.abstract}
-        for row in df.itertuples()
-        if getattr(row, "doi", None)
-    ]
-    raw = json.dumps(data).encode("utf-8")
-    file_obj = io.BytesIO(raw)
-    file_obj.name = "abstracts.json"
+    # Build manifest path
+    manifest_path = Path(f"{_ABSTRACT_MANIFEST_PREFIX}{vstore_id}.json")
+    if manifest_path.exists():
+        seen = set(json.loads(manifest_path.read_text()))
+    else:
+        seen = set()
 
-    # Upload as user_data
+    # Collect new records
+    new_records = []
+    for row in df.itertuples():
+        doi = getattr(row, "doi", None)
+        if not doi or doi in seen:
+            continue
+        new_records.append({"doi": doi, "abstract": row.abstract})
+        seen.add(doi)
+
+    if not new_records:
+        print(f"→ No new abstracts to ingest for store {vstore_id}.")
+        return
+
+    # Update manifest on disk
+    manifest_path.write_text(json.dumps(sorted(seen)))
+
+    # Prepare and upload JSON file
+    payload = json.dumps(new_records).encode("utf-8")
+    file_obj = io.BytesIO(payload)
+    file_obj.name = "new_abstracts.json"
+
     resp = client.files.create(
         file=file_obj,
-        purpose="user_data"      
+        purpose="user_data"
     )
     file_id = resp.id
 
-    # Now link the file into your vector store
-    client.vector_stores.files.create(vstore_id, file_id=file_id)
-    print(f"✓ Uploaded {len(data)} abstracts to store {vstore_id} (file_id={file_id})")
-        
-client = openai.OpenAI(api_key=settings.openai_api_key)
-_tkm = tiktoken.get_encoding("cl100k_base")
-_MANIFEST = ".pdf_manifest.json"
-
-def _load_manifest():
-    if os.path.exists(_MANIFEST):
-        return json.load(open(_MANIFEST))
-    return {}
-
-def _save_manifest(m):
-    json.dump(m, open(_MANIFEST, "w"))
-
-def chunk_text(text: str) -> list[str]:
-    toks = _tkm.encode(text)
-    size, ov = settings.chunk_size, settings.chunk_overlap
-    return [
-        _tkm.decode(toks[i : i + size])
-        for i in range(0, len(toks), size - ov)
-    ]
-
-def embed(chunks: list[str]) -> list[list[float]]:
-    resp = client.embeddings.create(
-        input=chunks, model=settings.embedding_model
+    # Register file with vector store
+    client.vector_stores.files.create(
+        vector_store_id=vstore_id,
+        file_id=file_id
     )
-    return [d.embedding for d in resp.data]
+    print(f"＋ Ingested {len(new_records)} new abstracts into {vstore_id} (file {file_id})")
 
-client = openai.OpenAI(api_key=settings.openai_api_key)
-_MANIFEST = ".pdf_manifest.json"
-
-def _load_manifest():
-    if os.path.exists(_MANIFEST):
-        import json
-        return json.load(open(_MANIFEST))
-    return {}
-
-def _save_manifest(m):
-    import json
-    json.dump(m, open(_MANIFEST, "w"))
 
 def index_pdf(pdf_path: str, vstore_id: str):
     """
-    Upload the PDF file to OpenAI (purpose=user_data) and register it
-    with the given vector store. The API will do chunking+embedding internally.
+    Upload a PDF to the vector store, skipping duplicates by SHA-256.
+    Stores the PDF’s DOI (derived from the filename) as metadata.
     """
-    # Skip duplicates by SHA‑256
-    sha = hashlib.sha256(open(pdf_path, "rb").read()).hexdigest()
-    manifest = _load_manifest()
-    if sha in manifest.get(vstore_id, []):
+    # Compute file hash
+    path = Path(pdf_path)
+    sha = hashlib.sha256(path.read_bytes()).hexdigest()
+
+    # Load or init PDF manifest
+    if Path(_PDF_MANIFEST).exists():
+        manifest = json.loads(Path(_PDF_MANIFEST).read_text())
+    else:
+        manifest = {}
+
+    seen = manifest.get(vstore_id, [])
+    if sha in seen:
         print(f"→ Skipping duplicate PDF: {pdf_path}")
         return
 
-    # Upload PDF to file storage
+    # Upload PDF file
     with open(pdf_path, "rb") as f:
         resp = client.files.create(file=f, purpose="user_data")
     file_id = resp.id
 
-    # Attach file to vector store
+    # Attach to vector store with DOI attribute
     client.vector_stores.files.create(
         vector_store_id=vstore_id,
         file_id=file_id,
-        attributes={"doi": Path(pdf_path).stem.replace("_", "/")}
+        attributes={"doi": path.stem.replace("_", "/")}
     )
     print(f"＋ Indexed PDF: {pdf_path} as file {file_id}")
 
-    # Update manifest
-    manifest.setdefault(vstore_id, []).append(sha)
-    _save_manifest(manifest)
+    # Update and save PDF manifest
+    seen.append(sha)
+    manifest[vstore_id] = seen
+    Path(_PDF_MANIFEST).write_text(json.dumps(manifest))
