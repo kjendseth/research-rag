@@ -1,81 +1,18 @@
 # agents/collector.py
 
-import requests
-import pandas as pd
-import time
-import hashlib
-import json
 import logging
-import os
-from Bio import Entrez          # pip install biopython
+import time
+from pathlib import Path
+
+import pandas as pd
+from Bio import Entrez, Medline  # pip install biopython
+
 from config import settings
-
-# … keep your _safe_crossref_request and crossref_enrich if you want enrichment …
-
-def pubmed_search(query, cap=5000) -> pd.DataFrame:
-    """
-    Fetch all records for `query`, up to `cap`. Extract pmid, doi,
-    title, abstract, journal, year, authors, keywords.
-    """
-    Entrez.email = settings.ncbi_email
-
-    # 1) get total count
-    handle = Entrez.esearch(db="pubmed", term=query, retmax=0)
-    total = int(Entrez.read(handle)["Count"])
-    if total > cap:
-        print(f"⚠️ {total} hits for '{query}', capping to {cap}")
-        total = cap
-
-    # 2) fetch all PMIDs
-    handle = Entrez.esearch(db="pubmed", term=query, retmax=total)
-    pmids = Entrez.read(handle)["IdList"]
-
-    # 3) fetch in batches
-    records = []
-    batch = 500
-    for i in range(0, len(pmids), batch):
-        chunk = pmids[i : i + batch]
-        recs = _fetch_medline_batch(chunk)
-        records.extend(recs)
-        time.sleep(0.5)
-
-    # 4) parse out fields
-    rows = []
-    for art in records:
-        pmid = art.get("PMID", "")
-        title = art.get("TI", "").replace("\n", " ")
-        abstract = art.get("AB", "").replace("\n", " ")
-        journal = art.get("JT", "")
-        year = art.get("DP", "")[:4]
-        # authors
-        auths = art.get("AU", [])
-        # keywords (MeSH)
-        mesh = art.get("MH", [])
-
-        # DOI from AID field
-        doi = next(
-            (aid.split()[0] for aid in art.get("AID", [])
-             if aid.endswith("[doi]")),
-            None
-        )
-
-        rows.append({
-            "pmid": pmid,
-            "doi": doi,
-            "title": title,
-            "abstract": abstract,
-            "journal": journal,
-            "year": year,
-            "authors": auths,
-            "keywords": mesh
-        })
-
-    return pd.DataFrame(rows)
-
 
 def _fetch_medline_batch(pmids, retries=3, delay=2.0):
     """
-    Helper to efetch and parse Medline text, with retries on IncompleteRead.
+    Helper to efetch and parse a batch of PMIDs from PubMed in Medline format,
+    retrying on errors. Returns a list of Medline record dicts.
     """
     attempt = 0
     while attempt < retries:
@@ -86,24 +23,94 @@ def _fetch_medline_batch(pmids, retries=3, delay=2.0):
                 rettype="medline",
                 retmode="text"
             )
-            records = list(Entrez.parse(handle))
+            records = list(Medline.parse(handle))
             handle.close()
             return records
         except Exception as e:
             attempt += 1
-            logging.warning("Fetch batch %s error: %s (retry %d/%d)",
-                            pmids[:1], e, attempt, retries)
+            logging.warning(
+                "Fetch batch %s error: %s (retry %d/%d)",
+                pmids[:1], e, attempt, retries
+            )
             time.sleep(delay)
     raise RuntimeError(f"Failed to fetch PMIDs {pmids[:1]} after {retries} retries")
 
 
+def pubmed_search(query: str, cap: int = 5000) -> pd.DataFrame:
+    """
+    Fetch up to `cap` PubMed records for `query`. Parses out:
+    - pmid
+    - doi (if present)
+    - title, abstract, journal, year
+    - authors list
+    - MeSH keywords list
+    Returns a pandas DataFrame.
+    """
+    Entrez.email = settings.ncbi_email
+
+    # 1) Get total count
+    handle = Entrez.esearch(db="pubmed", term=query, retmax=0)
+    total = int(Entrez.read(handle)["Count"])
+    handle.close()
+    if total > cap:
+        logging.warning("Query '%s' returned %d hits; capping at %d", query, total, cap)
+        total = cap
+
+    # 2) Retrieve all PMIDs
+    handle = Entrez.esearch(db="pubmed", term=query, retmax=total)
+    pmids = Entrez.read(handle)["IdList"]
+    handle.close()
+
+    # 3) Fetch records in batches
+    records = []
+    batch_size = 500
+    for i in range(0, len(pmids), batch_size):
+        batch = pmids[i : i + batch_size]
+        recs = _fetch_medline_batch(batch)
+        records.extend(recs)
+        time.sleep(0.5)  # be polite to NCBI
+
+    # 4) Parse fields
+    rows = []
+    for rec in records:
+        pmid     = rec.get("PMID", "")
+        title    = rec.get("TI", "").replace("\n", " ")
+        abstract = rec.get("AB", "").replace("\n", " ")
+        journal  = rec.get("JT", "")
+        year     = rec.get("DP", "")[:4]
+        authors  = rec.get("AU", [])               # list of strings
+        keywords = rec.get("MH", [])               # MeSH headings list
+
+        # Extract DOI if present
+        doi = next(
+            (aid.split()[0] for aid in rec.get("AID", []) if aid.endswith("[doi]")),
+            None
+        )
+
+        rows.append({
+            "pmid": pmid,
+            "doi": doi,
+            "title": title,
+            "abstract": abstract,
+            "journal": journal,
+            "year": year,
+            "authors": authors,
+            "keywords": keywords
+        })
+
+    return pd.DataFrame(rows)
+
+
 def collect(queries: list[str]) -> pd.DataFrame:
     """
-    Run pubmed_search over each query and concatenate unique PMIDs.
+    Run pubmed_search for each query in `queries`, concatenate the results,
+    and drop duplicate PMIDs. Returns a unified DataFrame.
     """
-    dfs = [pubmed_search(q) for q in queries]
-    df = pd.concat(dfs, ignore_index=True)
-
-    # dedupe by pmid (so we keep all, even if doi is missing)
+    df_list = []
+    for q in queries:
+        df_q = pubmed_search(q)
+        df_list.append(df_q)
+    df = pd.concat(df_list, ignore_index=True)
+    # Drop duplicate records by PMID, keep first occurrence
     df = df.drop_duplicates(subset="pmid")
     return df
