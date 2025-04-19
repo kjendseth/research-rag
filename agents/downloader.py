@@ -4,23 +4,38 @@ from config import settings
 
 def oa_pdf(doi: str) -> str | None:
     """
-    Query Unpaywall for the best OA PDF URL.
-    Return None on any error or missing data.
+    Safely query Unpaywall for the best OA PDF URL.
+    Returns None on HTTP error, JSON error, or missing field.
     """
+    url = f"https://api.unpaywall.org/v2/{doi}?email={settings.ncbi_email}"
     try:
-        url = f"https://api.unpaywall.org/v2/{doi}?email={settings.ncbi_email}"
         resp = requests.get(url, timeout=15)
-        if resp.status_code != 200:
-            logging.warning("Unpaywall returned %d for DOI %s", resp.status_code, doi)
-            return None
-        data = resp.json()  # may raise ValueError
-        return data.get("best_oa_location", {}).get("url_for_pdf")
     except requests.RequestException as ex:
         logging.warning("Unpaywall request error for DOI %s: %s", doi, ex)
+        return None
+
+    if resp.status_code != 200:
+        logging.warning("Unpaywall returned %d for DOI %s", resp.status_code, doi)
+        return None
+
+    # parse JSON safely
+    try:
+        payload = resp.json()
     except ValueError as ex:
         logging.warning("Invalid JSON from Unpaywall for DOI %s: %s", doi, ex)
-    return None
-    
+        return None
+
+    if not isinstance(payload, dict):
+        logging.warning("Unexpected payload type from Unpaywall for DOI %s", doi)
+        return None
+
+    # extract PDF URL
+    best = payload.get("best_oa_location")
+    if not isinstance(best, dict):
+        return None
+
+    return best.get("url_for_pdf")
+        
 def crossref_pdf(doi: str) -> str | None:
     """
     Safely fetch a PDF URL from Crossref's /works/{doi} endpoint.
