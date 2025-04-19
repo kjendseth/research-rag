@@ -1,5 +1,7 @@
 # agents/doi_selector.py
-import json, openai
+
+import json
+import openai
 from config import settings
 
 _SYSTEM = (
@@ -24,24 +26,33 @@ _FN_SCHEMA = {
 
 def run(question: str, abstract_store_id: str, k: int = 8) -> list[str]:
     """
-    Returns a list of DOIs (strings) proposed for full‑text download.
+    Searches the abstract vector store, then calls the select_dois function
+    to get a JSON list of DOIs.
     """
     client = openai.OpenAI(api_key=settings.openai_api_key)
 
-    resp = client.chat.completions.create(
+    # 1) Retrieval + function call via Responses API
+    response = client.responses.create(
         model=settings.llm_model,
-        messages=[
-            {"role": "system", "content": _SYSTEM},
-            {"role": "user",   "content": question}
-        ],
-        tools=[{"type": "file_search"}],
-        tool_choice="file_search",                 # <‑‑ require a search
-        file_search={                             # <‑‑ NEW (top‑level)
-            "vector_store_ids": [abstract_store_id],
+        input=question,
+        instructions=_SYSTEM,
+        tools=[{
+            "type": "file_search",
+            "vector_store_id": abstract_store_id,
             "max_num_results": k
-        },
+        }],
         functions=[_FN_SCHEMA],
         function_call={"name": "select_dois"}
     )
-    args = json.loads(resp.choices[0].message.function_call.arguments)
+
+    # 2) Extract the arguments from the tool call
+    # Depending on SDK version, the tool call may live in .tool_calls or .function_call
+    if hasattr(response, "tool_calls") and response.tool_calls:
+        func = response.tool_calls[0].function
+        args = json.loads(func.arguments)
+    elif hasattr(response, "function_call"):
+        args = json.loads(response.function_call.arguments)
+    else:
+        raise RuntimeError("No function call returned by DOI selector")
+
     return args["dois"]
