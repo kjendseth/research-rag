@@ -10,6 +10,7 @@ from pypdf import PdfReader, errors as pdf_errors
 import tiktoken
 from tqdm import tqdm
 from config import settings
+from pathlib import Path
 
 # Initialize OpenAI client
 client = openai.OpenAI(api_key=settings.openai_api_key)
@@ -129,6 +130,7 @@ def index_pdf(pdf_path: str, vstore_id: str):
     client.vector_stores.files.create(
         vector_store_id=vstore_id,
         file_id=file_id,
+        attributes={"doi": Path(pdf_path).stem.replace("_", "/")}
     )
     print(f"＋ Indexed PDF: {pdf_path} as file {file_id}")
 

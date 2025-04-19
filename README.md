@@ -46,8 +46,12 @@ export EZPROXY_PREFIX=https://ezproxy.youruni.no/login?url=
 
 1. **Build / refresh vector stores**  
    ```bash
-   python main.py --project atpase --keywords "P-type ATPase mechanism"
-   ```
+   # 1. Massive abstract corpus
+   python main.py ingest "type‑3 copper proteins" t3cup
+
+   # 2. Ask a focussed question – harvest only the PDFs you need
+   python main.py enrich t3cup "Focus on catalytic mechanisms and crystal structures"   ```
+
 2. **Ask a research question**  
    ```bash
    python main.py --project atpase --question "What open questions remain about E2P formation?"
