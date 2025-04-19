@@ -1,0 +1,12 @@
+openai>=1.15
+pandas
+requests
+pydantic
+tqdm
+pypdf
+scikit-learn
+umap-learn
+streamlit
+plotly
+playwright
+python-dotenv     # optional, if you prefer .env files
