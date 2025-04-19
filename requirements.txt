@@ -9,4 +9,6 @@ umap-learn
 streamlit
 plotly
 playwright
+tiktoken
+biopython
 python-dotenv     # optional, if you prefer .env files
