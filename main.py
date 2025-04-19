@@ -14,7 +14,7 @@ def pipeline(project, keywords):
 
 def rag_cli(project, question):
     ids = get_store_ids(project)
-    answer = writer.write_summary(question, ids["abstracts"], ids["pdfs"])
+    answer = writer.write_summary(question, ids["pdfs"])
     print(answer)
 
 if __name__ == "__main__":
