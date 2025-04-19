@@ -5,6 +5,7 @@ import os
 import json
 from pathlib import Path
 import openai
+from config import settings
 
 @dataclass
 class Settings:
@@ -32,7 +33,6 @@ def get_store_ids(project: str) -> dict[str,str]:
     real OpenAI vector store IDs (beginning with 'vs_'). If missing, create
     two new stores via the API and save them.
     """
-    # project workspace
     workdir = Path(project)
     workdir.mkdir(exist_ok=True)
     sid_file = workdir / "store_ids.json"
@@ -42,14 +42,12 @@ def get_store_ids(project: str) -> dict[str,str]:
     if sid_file.exists():
         return json.loads(sid_file.read_text())
 
-    # Create two vector stores: abstracts & pdfs
+    # Create two vector stores: abstracts & pdfs (only 'name' is required)
     abstracts_vs = client.vector_stores.create(
-        name=f"{project}-abstracts", 
-        description="Abstract embeddings store"
+        name=f"{project}-abstracts"
     ).id
     pdfs_vs = client.vector_stores.create(
-        name=f"{project}-fulltext", 
-        description="Full‑text PDF embeddings store"
+        name=f"{project}-fulltext"
     ).id
 
     ids = {"abstracts": abstracts_vs, "pdfs": pdfs_vs}
