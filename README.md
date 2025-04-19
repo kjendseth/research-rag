@@ -42,20 +42,22 @@ export EZPROXY_PREFIX=https://ezproxy.youruni.no/login?url=
 
 ---
 
-## Quick Start
+## Quick two‑stage + query workflow
 
-1. **Build / refresh vector stores**  
    ```bash
-   # 1. Massive abstract corpus
-   python main.py ingest "type‑3 copper proteins" t3cup
-
-   # 2. Ask a focussed question – harvest only the PDFs you need
-   python main.py enrich t3cup "Focus on catalytic mechanisms and crystal structures"   ```
-
-2. **Ask a research question**  
-   ```bash
-   python main.py --project atpase --question "What open questions remain about E2P formation?"
-   ```
+   # 1. Ingest all PubMed abstracts
+   python main.py ingest "binuclear copper proteins" t3cup
+   
+   # 2. Enrich with PDFs for a focussed topic
+   python main.py enrich t3cup "Catalytic mechanism details"
+   
+   # 3a. Ask a RAG‑grounded question over PDFs (default)
+   python main.py query t3cup "What open questions remain about E2P formation?"
+   
+   # 3b. Or ask over the abstract store instead
+   python main.py query t3cup "What open questions remain about E2P formation?" \
+    --store abstracts   
+    ```
 3. **Interactive exploration**  
    ```bash
    streamlit run dashboards/app.py
