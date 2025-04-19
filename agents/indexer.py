@@ -1,11 +1,22 @@
-# indexer.py  
-import json, hashlib, os, pypdf, openai, tiktoken
+# agents/indexer.py
+
+import os
+import json
+import hashlib
+import openai
+import pypdf
+import tiktoken
+from tqdm import tqdm
 from config import settings
 
+# Initialize OpenAI client
 client = openai.OpenAI(api_key=settings.openai_api_key)
+
+# Tokenizer for chunking
 _tkm = tiktoken.get_encoding("cl100k_base")
 
-_MANIFEST = ".pdf_manifest.json"   # local cache of sha256 → store_ids
+# Local manifest to dedupe PDF embeddings by hash
+_MANIFEST = ".pdf_manifest.json"
 
 def _load_manifest():
     if os.path.exists(_MANIFEST):
@@ -13,20 +24,73 @@ def _load_manifest():
     return {}
 
 def _save_manifest(m):
-    json.dump(m, open(_MANIFEST,"w"))
+    json.dump(m, open(_MANIFEST, "w"))
+
+def chunk_text(text: str) -> list[str]:
+    """Split large text into overlapping chunks."""
+    toks = _tkm.encode(text)
+    size, ov = settings.chunk_size, settings.chunk_overlap
+    return [
+        _tkm.decode(toks[i : i + size])
+        for i in range(0, len(toks), size - ov)
+    ]
+
+def embed(chunks: list[str]) -> list[list[float]]:
+    """Call OpenAI to get embeddings for each chunk."""
+    resp = client.embeddings.create(
+        input=chunks, model=settings.embedding_model
+    )
+    return [d.embedding for d in resp.data]
+
+def index_abstracts(df, vstore_id: str):
+    """
+    Upload all (doi, abstract) records as one file,
+    then register it with the abstract vector store.
+    """
+    data = [
+        {"doi": row.doi, "abstract": row.abstract}
+        for row in df.itertuples()
+        if getattr(row, "doi", None)
+    ]
+    file_id = client.files.create(
+        file=json.dumps(data), purpose="vector-store"
+    ).id
+    client.vector_stores.files.create(vstore_id, file_id=file_id)
+    print(f"✓ Uploaded {len(data)} abstracts to store {vstore_id}")
 
 def index_pdf(pdf_path: str, vstore_id: str):
-    sha = hashlib.sha256(open(pdf_path,"rb").read()).hexdigest()
+    """
+    Read the PDF, chunk it, dedupe by SHA256, embed and store.
+    Skips if the same SHA is already in the manifest for this store.
+    """
+    # Compute hash
+    with open(pdf_path, "rb") as f:
+        sha = hashlib.sha256(f.read()).hexdigest()
+
     manifest = _load_manifest()
-    if sha in manifest.get(vstore_id, []):
-        print(f"✓ duplicate PDF, already in store: {pdf_path}")
+    seen = manifest.get(vstore_id, [])
+    if sha in seen:
+        print(f"→ Skipping duplicate PDF: {pdf_path}")
         return
-    text = "\n".join(p.extract_text() for p in pypdf.PdfReader(pdf_path).pages)
+
+    # Extract text
+    reader = pypdf.PdfReader(pdf_path)
+    text = "\n".join(
+        page.extract_text() or "" for page in reader.pages
+    )
+
+    # Chunk & embed
     chunks = chunk_text(text)
-    embeds = embed(chunks)
+    embeddings = embed(chunks)
+
+    # Send to vector store
     client.vector_stores.create_chunk_embeddings(
-        vstore_id, embeddings=embeds,
-        metadata={"pdf": pdf_path, "sha256": sha})
+        vstore_id,
+        embeddings=embeddings,
+        metadata=[{"pdf": pdf_path, "sha256": sha} for _ in embeddings],
+    )
+
+    # Update manifest
     manifest.setdefault(vstore_id, []).append(sha)
     _save_manifest(manifest)
-    print(f"＋ PDF embedded: {pdf_path}")
+    print(f"＋ Indexed PDF: {pdf_path} ({len(chunks)} chunks)")
