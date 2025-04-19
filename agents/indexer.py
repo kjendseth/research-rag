@@ -45,32 +45,29 @@ def embed(chunks: list[str]) -> list[list[float]]:
 
 def index_abstracts(df, vstore_id: str):
     """
-    Upload all (doi, abstract) records as one JSON file,
+    Upload all (doi, abstract) records as one JSON file (as user_data),
     then register it with the abstract vector store.
     """
-    # Prepare JSON data
     data = [
         {"doi": row.doi, "abstract": row.abstract}
         for row in df.itertuples()
         if getattr(row, "doi", None)
     ]
     raw = json.dumps(data).encode("utf-8")
-
-    # Wrap in a BytesIO so OpenAI client accepts it
     file_obj = io.BytesIO(raw)
     file_obj.name = "abstracts.json"
 
-    # Upload to OpenAI
+    # Upload as user_data
     resp = client.files.create(
         file=file_obj,
-        purpose="vector-store"
+        purpose="user_data"      
     )
     file_id = resp.id
 
-    # Link that file into your vector store
+    # Now link the file into your vector store
     client.vector_stores.files.create(vstore_id, file_id=file_id)
     print(f"✓ Uploaded {len(data)} abstracts to store {vstore_id} (file_id={file_id})")
-    
+        
 def index_pdf(pdf_path: str, vstore_id: str):
     """
     Read the PDF, chunk it, dedupe by SHA256, embed and store.
