@@ -10,17 +10,17 @@ def semantic_search(vector_store_id: str, query: str, limit: int = 100) -> list[
     Return up to `limit` papers whose abstract/title matches `query` semantically.
     Each dict has keys: doi, pmid, title, snippet.
     """
-    # 1) embed the query
+    # 1) Embed the query
     emb_resp = client.embeddings.create(
         model=settings.embedding_model,
         input=[query]
     )
     emb = emb_resp.data[0].embedding
 
-    # 2) vector search
+    # 2) Vector search using the correct 'embedding' argument
     resp = client.vector_stores.search(
         vector_store_id=vector_store_id,
-        query_embedding=emb,
+        embedding=emb,
         limit=limit
     )
 
