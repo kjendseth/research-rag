@@ -10,14 +10,15 @@ def semantic_search(vector_store_id: str, query: str, limit: int = 100) -> list[
     Return up to `limit` papers whose abstract/title matches `query` semantically.
     Each dict has keys: doi, pmid, title, snippet.
     """
-    params = {
-        "vector_store_id": vector_store_id,
-        "query": query,
-        "limit": limit
-    }
-    resp = client.vector_stores.search(params)
+    # 1) call the SDK with the query string
+    resp = client.vector_stores.search(
+        vector_store_id=vector_store_id,
+        query=query
+    )
+
+    hits = resp.data[:limit]  # enforce limit client‑side
     results = []
-    for hit in resp.data:
+    for hit in hits:
         meta = hit.metadata or {}
         text = hit.document or ""
         snippet = text[:200].replace("\n", " ")
@@ -31,38 +32,42 @@ def semantic_search(vector_store_id: str, query: str, limit: int = 100) -> list[
 
 def search_by_author(vector_store_id: str, author_substr: str, limit: int = 1000) -> list[dict]:
     """
-    Return all entries whose metadata.authors list contains `author_substr`.
+    Return up to `limit` entries whose metadata.authors list contains `author_substr`.
     """
-    params = {
-        "vector_store_id": vector_store_id,
-        "filter": {"metadata.authors": {"$contains": author_substr.lower()}},
-        "limit": limit
-    }
-    resp = client.vector_stores.search(params)
+    filt = {"metadata.authors": {"$contains": author_substr.lower()}}
+    resp = client.vector_stores.search(
+        vector_store_id=vector_store_id,
+        query="",       # required by signature
+        filter=filt
+    )
+
+    hits = resp.data[:limit]
     return [
         {
             "doi":   hit.metadata.get("doi"),
             "pmid":  hit.metadata.get("pmid"),
             "title": hit.metadata.get("title")
         }
-        for hit in resp.data
+        for hit in hits
     ]
 
 def search_by_pmc(vector_store_id: str, limit: int = 1000) -> list[dict]:
     """
-    Return all entries that have a non‑empty PMC metadata field.
+    Return up to `limit` entries that have a non‑empty PMC metadata field.
     """
-    params = {
-        "vector_store_id": vector_store_id,
-        "filter": {"metadata.pmc": {"$ne": ""}},
-        "limit": limit
-    }
-    resp = client.vector_stores.search(params)
+    filt = {"metadata.pmc": {"$ne": ""}}
+    resp = client.vector_stores.search(
+        vector_store_id=vector_store_id,
+        query="",      # required by signature
+        filter=filt
+    )
+
+    hits = resp.data[:limit]
     return [
         {
             "doi":   hit.metadata.get("doi"),
             "pmid":  hit.metadata.get("pmid"),
             "title": hit.metadata.get("title")
         }
-        for hit in resp.data
+        for hit in hits
     ]
