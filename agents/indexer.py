@@ -12,40 +12,50 @@ _ABSTRACT_MANIFEST = ".abstract_manifest.json"
 
 def index_abstracts(df, vstore_id: str):
     """
-    Batch‑upload all new abstracts as a single JSON file with inline metadata
-    and a static chunking strategy (max 4096 tokens per chunk).
+    Batch‑upload new abstracts as a JSON file where each line has both
+    'text' and 'metadata' keys. Static chunking keeps each record intact.
     """
-    # 1) Load or initialize seen‑PMID manifest
+    # 1) load or init seen PMIDs
     mpath = Path(_ABSTRACT_MANIFEST)
     seen = set(json.loads(mpath.read_text())) if mpath.exists() else set()
 
-    # 2) Build list of new records
     records = []
     for row in df.itertuples():
         pmid = row.pmid
         if not pmid or pmid in seen:
             continue
 
-        block = (
-            f"DOI:{row.doi or ''}\n"
-            f"PMC:{row.pmc or ''}\n"
-            f"Title:{row.title}\n"
-            "Abstract:\n"
-            f"{row.abstract}"
-        )
-        records.append({"text": block})
+        # metadata dict
+        attrs = {
+            "pmid":    pmid,
+            "doi":     row.doi or "",
+            "pmc":     getattr(row, "pmc", "") or "",
+            "title":   row.title or "",
+            "journal": row.journal or "",
+            "year":    str(row.year or ""),
+            "authors": "; ".join(row.authors or []),
+            "keywords":"; ".join(row.keywords or [])
+        }
+
+        # text payload (can be just abstract if you prefer)
+        text_block = f"Title: {row.title}\n\nAbstract:\n{row.abstract}"
+
+        records.append({
+            "text":     text_block,
+            "metadata": attrs
+        })
         seen.add(pmid)
 
     if not records:
         print(f"→ No new abstracts to ingest for store {vstore_id}.")
         return
 
-    # 3) Serialize to JSONL and wrap as .json
+    # 2) serialize JSONL and wrap as .json
     jsonl = "\n".join(json.dumps(r, ensure_ascii=False) for r in records)
     buf = io.BytesIO(jsonl.encode("utf-8"))
-    buf.name = "abstracts_batch.json"   # must be .json
+    buf.name = "abstracts_with_metadata.json"
 
-    # 4) Upload + import with static chunking (max 4096 tokens per chunk)
+    # 3) batch import with static chunking (each record → one chunk + attributes)
     client.vector_stores.files.upload_and_poll(
         vector_store_id=vstore_id,
         file=buf,
@@ -58,6 +68,6 @@ def index_abstracts(df, vstore_id: str):
         }
     )
 
-    # 5) Save updated manifest
+    # 4) save manifest
     mpath.write_text(json.dumps(sorted(seen)))
     print(f"＋ Indexed {len(records)} abstracts in one batch into {vstore_id}")
