@@ -11,11 +11,16 @@ client = openai.OpenAI(api_key=settings.openai_api_key)
 
 _ABSTRACT_MANIFEST = ".abstract_manifest.json"
 _PDF_MANIFEST      = ".pdf_manifest.json"
+_MAX_ATTR_LEN      = 512
+
+def _truncate(s: str) -> str:
+    """Ensure attribute string ≤ 512 chars."""
+    return s if len(s) <= _MAX_ATTR_LEN else s[:_MAX_ATTR_LEN]
 
 def index_abstracts(df, vstore_id: str):
     """
     Incrementally upload each abstract as its own vector‑store file,
-    serializing list attributes into strings.
+    serializing and truncating list attributes into strings.
     """
     manifest_path = Path(_ABSTRACT_MANIFEST)
     seen = set(json.loads(manifest_path.read_text())) if manifest_path.exists() else set()
@@ -26,29 +31,29 @@ def index_abstracts(df, vstore_id: str):
         if not pmid or pmid in seen:
             continue
 
-        # Serialize list fields into strings
-        authors_str  = "; ".join(row.authors or [])
-        keywords_str = "; ".join(row.keywords or [])
+        # Serialize and truncate list fields
+        authors_str  = _truncate("; ".join(row.authors or []))
+        keywords_str = _truncate("; ".join(row.keywords or []))
 
         attrs = {
-            "pmid":    pmid,
-            "doi":     row.doi   or "",
-            "pmc":     getattr(row, "pmc", "") or "",
-            "title":   row.title or "",
-            "journal": row.journal or "",
-            "year":    str(row.year or ""),
-            "authors": authors_str,
+            "pmid":     pmid,
+            "doi":      row.doi    or "",
+            "pmc":      getattr(row, "pmc", "") or "",
+            "title":    _truncate(row.title or ""),
+            "journal":  _truncate(row.journal or ""),
+            "year":     str(row.year or ""),
+            "authors":  authors_str,
             "keywords": keywords_str
         }
 
-        # Build the payload
+        # Build the text payload
         payload = json.dumps({"text": f"{row.title}\n\n{row.abstract}"}).encode("utf-8")
         buf = io.BytesIO(payload)
         buf.name = f"{pmid}.json"
 
         # Upload file
         f = client.files.create(file=buf, purpose="user_data")
-        # Attach to vector store with serialized attributes
+        # Attach to vector store with truncated attributes
         client.vector_stores.files.create(
             vector_store_id=vstore_id,
             file_id=f.id,
