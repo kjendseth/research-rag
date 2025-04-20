@@ -1,6 +1,7 @@
 # agents/metadata_agent.py
 
-import json, openai
+import json
+import openai
 from config import settings
 from agents.metadata_tools import semantic_search, search_by_author, search_by_pmc
 
@@ -48,12 +49,12 @@ FUNCTIONS = [
 def agent_query(question: str, store_id: str) -> str:
     client = openai.OpenAI(api_key=settings.openai_api_key)
 
-    # Step 1: let the model choose which function to call
+    # Let model pick function
     resp = client.chat.completions.create(
         model=settings.llm_model,
         messages=[
-            {"role":"system","content":"You can call functions to fetch papers by semantic or metadata filters."},
-            {"role":"user","content":question}
+            {"role": "system", "content": "You can call functions to fetch papers."},
+            {"role": "user",   "content": question}
         ],
         functions=FUNCTIONS,
         function_call="auto"
@@ -63,10 +64,10 @@ def agent_query(question: str, store_id: str) -> str:
     if not msg.function_call:
         return msg.content
 
-    fn  = msg.function_call.name
-    args= json.loads(msg.function_call.arguments)
+    fn   = msg.function_call.name
+    args = json.loads(msg.function_call.arguments)
 
-    # Step 2: execute the function
+    # Execute chosen function
     if fn == "semantic_search":
         results = semantic_search(**args)
     elif fn == "search_by_author":
@@ -76,14 +77,13 @@ def agent_query(question: str, store_id: str) -> str:
     else:
         return f"Error: unknown function {fn}"
 
-    # Step 3: hand results back to the model for summarization
+    # Hand back to model for summary
     follow = client.chat.completions.create(
         model=settings.llm_model,
         messages=[
-            {"role":"system","content":"Here are the raw function results."},
-            {"role":"assistant","content":json.dumps(results)},
-            {"role":"user","content":"Please summarize these papers, including their DOIs and one‑sentence snippet each."}
+            {"role":"system","content":"Here are function results."},
+            {"role":"assistant","content": json.dumps(results)},
+            {"role":"user","content":"Please summarize these papers, listing each DOI and a one-sentence snippet."}
         ]
     )
-
     return follow.choices[0].message.content

@@ -11,10 +11,11 @@ def semantic_search(vector_store_id: str, query: str, limit: int = 100) -> list[
     Each dict has keys: doi, pmid, title, snippet.
     """
     # 1) embed the query
-    emb = client.embeddings.create(
+    emb_resp = client.embeddings.create(
         model=settings.embedding_model,
         input=[query]
-    ).data[0].embedding
+    )
+    emb = emb_resp.data[0].embedding
 
     # 2) vector search
     resp = client.vector_stores.search(
@@ -25,9 +26,9 @@ def semantic_search(vector_store_id: str, query: str, limit: int = 100) -> list[
 
     results = []
     for hit in resp.data:
-        meta = hit.metadata
+        meta = hit.metadata or {}
         text = hit.document or ""
-        snippet = text[:200].replace("\n"," ")
+        snippet = text[:200].replace("\n", " ")
         results.append({
             "doi": meta.get("doi"),
             "pmid": meta.get("pmid"),
@@ -35,3 +36,39 @@ def semantic_search(vector_store_id: str, query: str, limit: int = 100) -> list[
             "snippet": snippet
         })
     return results
+
+def search_by_author(vector_store_id: str, author_substr: str, limit: int = 1000) -> list[dict]:
+    """
+    Return all entries whose metadata.authors list contains `author_substr`.
+    """
+    resp = client.vector_stores.search(
+        vector_store_id=vector_store_id,
+        filter={"metadata.authors": {"$contains": author_substr.lower()}},
+        limit=limit
+    )
+    return [
+        {
+            "doi": hit.metadata.get("doi"),
+            "pmid": hit.metadata.get("pmid"),
+            "title": hit.metadata.get("title")
+        }
+        for hit in resp.data
+    ]
+
+def search_by_pmc(vector_store_id: str, limit: int = 1000) -> list[dict]:
+    """
+    Return all entries that have a non‑empty PMC metadata field.
+    """
+    resp = client.vector_stores.search(
+        vector_store_id=vector_store_id,
+        filter={"metadata.pmc": {"$ne": ""}},
+        limit=limit
+    )
+    return [
+        {
+            "doi": hit.metadata.get("doi"),
+            "pmid": hit.metadata.get("pmid"),
+            "title": hit.metadata.get("title")
+        }
+        for hit in resp.data
+    ]
