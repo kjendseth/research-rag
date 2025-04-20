@@ -15,7 +15,7 @@ from config import settings
 def main():
     import argparse
     p = argparse.ArgumentParser(
-        description="Delete vector stores, their files, and local manifests for a project")
+        description="Delete vector stores, all their attached files, and local manifests for a project")
     p.add_argument("project", help="project folder name (e.g. t3cup)")
     args = p.parse_args()
 
@@ -42,7 +42,7 @@ def main():
             attached = []
 
         for att in attached:
-            # The VectorStoreFile object has an 'id' field, not 'file_id'
+            # VectorStoreFile.id is the file-upload ID
             fid = getattr(att, "file_id", None) or getattr(att, "id", None)
             if not fid:
                 print(f"  ⚠️ Could not determine file ID for attachment: {att}")
