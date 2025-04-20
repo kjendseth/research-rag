@@ -8,31 +8,22 @@ client = openai.OpenAI(api_key=settings.openai_api_key)
 def semantic_search(vector_store_id: str, query: str, limit: int = 100) -> list[dict]:
     """
     Return up to `limit` papers whose abstract/title matches `query` semantically.
-    Each dict has keys: doi, pmid, title, snippet.
+    Uses the built‑in 'query' argument. Each dict has keys: doi, pmid, title, snippet.
     """
-    # 1) embed the query
-    emb_resp = client.embeddings.create(
-        model=settings.embedding_model,
-        input=[query]
-    )
-    emb = emb_resp.data[0].embedding
-
-    # 2) vector search — note: use `vector=` here
     resp = client.vector_stores.search(
         vector_store_id=vector_store_id,
-        vector=emb,
+        query=query,
         limit=limit
     )
-
     results = []
     for hit in resp.data:
         meta = hit.metadata or {}
         text = hit.document or ""
         snippet = text[:200].replace("\n", " ")
         results.append({
-            "doi":    meta.get("doi"),
-            "pmid":   meta.get("pmid"),
-            "title":  meta.get("title"),
+            "doi":     meta.get("doi"),
+            "pmid":    meta.get("pmid"),
+            "title":   meta.get("title"),
             "snippet": snippet
         })
     return results
