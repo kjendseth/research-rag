@@ -12,20 +12,19 @@ _ABSTRACT_MANIFEST = ".abstract_manifest.json"
 
 def index_abstracts(df, vstore_id: str):
     """
-    Batch‑upload all new abstracts as a single JSONL file, embedding metadata
-    into the text and using a static chunking strategy so each record is one chunk.
+    Batch‑upload all new abstracts as a single JSON file with inline metadata + static chunking.
     """
-    # 1) Load or init seen‑PMID manifest
+    # 1) Load or init seen manifest
     mpath = Path(_ABSTRACT_MANIFEST)
     seen = set(json.loads(mpath.read_text())) if mpath.exists() else set()
 
-    lines = []
+    # 2) Build list of record blocks
+    records = []
     for row in df.itertuples():
         pmid = row.pmid
         if not pmid or pmid in seen:
             continue
 
-        # Build a single TEXT block including metadata headers
         block = (
             f"DOI:{row.doi or ''}\n"
             f"PMC:{row.pmc or ''}\n"
@@ -33,20 +32,19 @@ def index_abstracts(df, vstore_id: str):
             "Abstract:\n"
             f"{row.abstract}"
         )
-        lines.append({"text": block})
+        records.append({"text": block})
         seen.add(pmid)
 
-    if not lines:
-        print(f"→ No new abstracts for {vstore_id}.")
+    if not records:
+        print(f"→ No new abstracts to ingest for store {vstore_id}.")
         return
 
-    # 2) Write JSONL
-    jsonl = "\n".join(json.dumps(l, ensure_ascii=False) for l in lines)
+    # 3) Write JSONL under a .json name
+    jsonl = "\n".join(json.dumps(r, ensure_ascii=False) for r in records)
     buf = io.BytesIO(jsonl.encode("utf-8"))
-    buf.name = "abstracts_batch.jsonl"
+    buf.name = "abstracts_batch.json"   # must be .json
 
-    # 3) Upload & attach with a static chunking strategy
-    #    so each JSONL line becomes exactly one vector chunk
+    # 4) Upload + import with static chunking
     client.vector_stores.files.upload_and_poll(
         vector_store_id=vstore_id,
         file=buf,
@@ -59,6 +57,6 @@ def index_abstracts(df, vstore_id: str):
         }
     )
 
-    # 4) Save manifest
+    # 5) Save manifest
     mpath.write_text(json.dumps(sorted(seen)))
-    print(f"＋ Indexed {len(lines)} abstracts in one batch into {vstore_id}")
+    print(f"＋ Indexed {len(records)} abstracts in one batch into {vstore_id}")
