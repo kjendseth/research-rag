@@ -16,20 +16,14 @@ if not api_key:
     sys.exit(1)
 client = openai.OpenAI(api_key=api_key)
 
-# 2) Page through all files
+# 2) Fetch one page of files (up to 100)
 print("Fetching file list…")
-cursor = None
+resp = client.files.list(limit=100)
 to_delete = []
-while True:
-    resp = client.files.list(limit=100, cursor=cursor)
-    for f in resp.data:
-        name = getattr(f, "filename", f"{getattr(f,'id','')}")
-        # adjust these patterns to match your project uploads
-        if name.endswith((".json", ".jsonl", ".pdf")):
-            to_delete.append((f.id, name))
-    if not resp.has_more:
-        break
-    cursor = resp.next_cursor
+for f in resp.data:
+    name = getattr(f, "filename", None) or f.id
+    if name.endswith((".json", ".jsonl", ".pdf")):
+        to_delete.append((f.id, name))
 
 # 3) Delete them
 print(f"Found {len(to_delete)} files to delete.")
@@ -40,4 +34,4 @@ for fid, fname in to_delete:
     except Exception as e:
         print(f"✗ Failed to delete {fname} ({fid}): {e}")
 
-print("\nAll matching files have been removed.")
+print("\nAll matching files on this page have been removed.")
