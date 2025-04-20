@@ -2,7 +2,6 @@
 
 import io
 import json
-import hashlib
 import openai
 from pathlib import Path
 from config import settings
@@ -14,75 +13,77 @@ _PDF_MANIFEST      = ".pdf_manifest.json"
 _MAX_ATTR_LEN      = 512
 
 def _truncate(s: str) -> str:
-    """Ensure attribute string ≤ 512 chars."""
     return s if len(s) <= _MAX_ATTR_LEN else s[:_MAX_ATTR_LEN]
 
 def index_abstracts(df, vstore_id: str):
     """
-    Incrementally upload each abstract as its own vector‑store file,
-    serializing and truncating list attributes into strings.
+    Batch‑upload new abstracts as a single JSONL file with embedded metadata.
     """
-    manifest_path = Path(_ABSTRACT_MANIFEST)
-    seen = set(json.loads(manifest_path.read_text())) if manifest_path.exists() else set()
+    # 1. load or init seen manifest
+    mpath = Path(_ABSTRACT_MANIFEST)
+    seen = set(json.loads(mpath.read_text())) if mpath.exists() else set()
 
-    new_count = 0
+    # 2. build list of new-record dicts
+    new_meta = []
     for row in df.itertuples():
         pmid = getattr(row, "pmid", None)
         if not pmid or pmid in seen:
             continue
 
-        # Serialize and truncate list fields
-        authors_str  = _truncate("; ".join(row.authors or []))
-        keywords_str = _truncate("; ".join(row.keywords or []))
-
+        # prepare metadata, serializing lists to semicolon strings
         attrs = {
-            "pmid":     pmid,
-            "doi":      row.doi    or "",
-            "pmc":      getattr(row, "pmc", "") or "",
-            "title":    _truncate(row.title or ""),
-            "journal":  _truncate(row.journal or ""),
-            "year":     str(row.year or ""),
-            "authors":  authors_str,
-            "keywords": keywords_str
+            "pmid":    pmid,
+            "doi":     row.doi or "",
+            "pmc":     getattr(row, "pmc", "") or "",
+            "title":   _truncate(row.title or ""),
+            "journal": _truncate(row.journal or ""),
+            "year":    str(row.year or ""),
+            "authors": _truncate("; ".join(row.authors or [])),
+            "keywords":_truncate("; ".join(row.keywords or []))
         }
 
-        # Build the text payload
-        payload = json.dumps({"text": f"{row.title}\n\n{row.abstract}"}).encode("utf-8")
-        buf = io.BytesIO(payload)
-        buf.name = f"{pmid}.json"
-
-        # Upload file
-        f = client.files.create(file=buf, purpose="user_data")
-        # Attach to vector store with truncated attributes
-        client.vector_stores.files.create(
-            vector_store_id=vstore_id,
-            file_id=f.id,
-            attributes=attrs
-        )
-
+        new_meta.append({
+            "text": f"{row.title}\n\n{row.abstract}",
+            "metadata": attrs
+        })
         seen.add(pmid)
-        new_count += 1
 
-    # Save updated manifest
-    manifest_path.write_text(json.dumps(sorted(seen)))
-    print(f"＋ Indexed {new_count} new abstracts into {vstore_id}")
+    if not new_meta:
+        print(f"→ No new abstracts to ingest for store {vstore_id}.")
+        return
+
+    # 3. serialize to JSONL
+    jsonl = "\n".join(json.dumps(rec, ensure_ascii=False) for rec in new_meta)
+    buf = io.BytesIO(jsonl.encode("utf-8"))
+    buf.name = "new_abstracts.jsonl"
+
+    # 4. upload file once
+    f = client.files.create(file=buf, purpose="user_data")
+    # 5. import entire batch into vector store
+    client.vector_stores.files.create(
+        vector_store_id=vstore_id,
+        file_id=f.id
+    )
+
+    # 6. write updated manifest
+    mpath.write_text(json.dumps(sorted(seen)))
+    print(f"＋ Indexed {len(new_meta)} abstracts in one batch into {vstore_id}")
 
 def index_pdf(pdf_path: str, vstore_id: str):
     """
-    Upload a PDF to the vector store, skipping duplicates by SHA‑256,
-    attaching DOI in metadata.
+    (Unchanged) Upload a single PDF if not already seen.
     """
+    import hashlib
     sha = hashlib.sha256(Path(pdf_path).read_bytes()).hexdigest()
 
     pm = Path(_PDF_MANIFEST)
     manifest = json.loads(pm.read_text()) if pm.exists() else {}
-
     seen = set(manifest.get(vstore_id, []))
+
     if sha in seen:
         print(f"→ Skipping duplicate PDF: {pdf_path}")
         return
 
-    # Upload PDF
     with open(pdf_path, "rb") as fbin:
         f = client.files.create(file=fbin, purpose="user_data")
 
@@ -94,7 +95,6 @@ def index_pdf(pdf_path: str, vstore_id: str):
     )
     print(f"＋ Indexed PDF {pdf_path} into {vstore_id}")
 
-    # Update PDF manifest
     seen.add(sha)
     manifest[vstore_id] = list(seen)
     pm.write_text(json.dumps(manifest))
