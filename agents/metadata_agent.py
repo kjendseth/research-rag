@@ -49,11 +49,11 @@ FUNCTIONS = [
 def agent_query(question: str, store_id: str) -> str:
     client = openai.OpenAI(api_key=settings.openai_api_key)
 
-    # Let model pick function
+    # 1) Ask the model which function to call (it won't know your store_id)
     resp = client.chat.completions.create(
         model=settings.llm_model,
         messages=[
-            {"role": "system", "content": "You can call functions to fetch papers."},
+            {"role": "system", "content": "You can call functions to fetch papers by metadata or semantic search."},
             {"role": "user",   "content": question}
         ],
         functions=FUNCTIONS,
@@ -61,29 +61,33 @@ def agent_query(question: str, store_id: str) -> str:
     )
 
     msg = resp.choices[0].message
+
+    # If no function was chosen, just return the text
     if not msg.function_call:
         return msg.content
 
-    fn   = msg.function_call.name
+    # 2) Parse the function call and inject your real store_id
+    fn_name = msg.function_call.name
     args = json.loads(msg.function_call.arguments)
+    args["vector_store_id"] = store_id
 
-    # Execute chosen function
-    if fn == "semantic_search":
+    # 3) Execute the correct tool
+    if fn_name == "semantic_search":
         results = semantic_search(**args)
-    elif fn == "search_by_author":
+    elif fn_name == "search_by_author":
         results = search_by_author(**args)
-    elif fn == "search_by_pmc":
+    elif fn_name == "search_by_pmc":
         results = search_by_pmc(**args)
     else:
-        return f"Error: unknown function {fn}"
+        return f"Error: function {fn_name} not implemented."
 
-    # Hand back to model for summary
+    # 4) Hand the raw results list back to GPT for a human‑friendly summary
     follow = client.chat.completions.create(
         model=settings.llm_model,
         messages=[
-            {"role":"system","content":"Here are function results."},
-            {"role":"assistant","content": json.dumps(results)},
-            {"role":"user","content":"Please summarize these papers, listing each DOI and a one-sentence snippet."}
+            {"role": "system",    "content": "Here are the function results you requested."},
+            {"role": "assistant", "content": json.dumps(results)},
+            {"role": "user",      "content": "Please summarize these entries, listing each DOI and a one‑sentence snippet."}
         ]
     )
     return follow.choices[0].message.content
