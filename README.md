@@ -45,18 +45,18 @@ export EZPROXY_PREFIX=https://ezproxy.youruni.no/login?url=
 ## Quick two‑stage + query workflow
 
    ```bash
-   # 1. Ingest all PubMed abstracts
-   python main.py ingest "binuclear copper proteins" t3cup
-   
-   # 2. Enrich with PDFs for a focussed topic
-   python main.py enrich t3cup "Catalytic mechanism details"
-   
-   # 3a. Ask a RAG‑grounded question over PDFs (default)
-   python main.py query t3cup "What open questions remain about E2P formation?"
-   
-   # 3b. Or ask over the abstract store instead
-   python main.py query t3cup "What open questions remain about E2P formation?" \
-    --store abstracts   
+# 1. Ingest all PubMed abstracts
+python main.py ingest "binuclear copper proteins" t3cup
+
+# 2. Enrich with PDFs for a focussed topic
+python main.py enrich t3cup "Catalytic mechanism details"
+
+# 3a. Ask a RAG‑grounded question over the abstracts store (default)
+python main.py query t3cup "What open questions remain about E2P formation?"
+
+# 3b. Or explicitly target the PDF store instead
+python main.py query t3cup "What open questions remain about E2P formation?" --store pdfs
+
     ```
 3. **Interactive exploration**  
    ```bash

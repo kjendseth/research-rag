@@ -49,8 +49,8 @@ if __name__ == "__main__":
     qry.add_argument("project")
     qry.add_argument("question")
     qry.add_argument(
-        "--store", choices=["abstracts", "pdfs"], default="pdfs",
-        help="Which vector store to query (default: pdfs)"
+        "--store", choices=["abstracts", "pdfs"], default="abstracts",
+        help="Which vector store to query (default: abstracts)"
     )
 
     args = p.parse_args()
