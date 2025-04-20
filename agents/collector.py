@@ -1,7 +1,6 @@
 # agents/collector.py
 
 import logging
-import re
 import time
 from pathlib import Path
 
@@ -11,9 +10,6 @@ from Bio import Entrez, Medline   # pip install biopython
 from config import settings
 
 def _fetch_medline_batch(pmids, retries=3, delay=2.0):
-    """
-    Fetch a batch of PMIDs in Medline format.
-    """
     attempt = 0
     while attempt < retries:
         try:
@@ -35,9 +31,11 @@ def _fetch_medline_batch(pmids, retries=3, delay=2.0):
             time.sleep(delay)
     raise RuntimeError(f"Failed to fetch PMIDs {pmids[:1]} after {retries} retries")
 
+
 def _fetch_nbib_batch(pmids, retries=3, delay=2.0):
     """
-    Fetch the same batch of PMIDs in NBIB format, returning a list of entry strings.
+    Fetch NBIB entries for a batch of PMIDs; returns list of raw NBIB strings,
+    one per PMID, in the same order.
     """
     attempt = 0
     while attempt < retries:
@@ -50,11 +48,20 @@ def _fetch_nbib_batch(pmids, retries=3, delay=2.0):
             )
             raw = handle.read()
             handle.close()
-            # Split on lookahead for "PMID- "
-            entries = re.split(r'(?=PMID- )', raw)
-            # Remove any empty leading chunk
-            if entries and not entries[0].startswith("PMID-"):
-                entries = entries[1:]
+            # Split lines and group by lines starting with PMID-
+            entries = []
+            current = []
+            for line in raw.splitlines():
+                if line.startswith("PMID- "):
+                    if current:
+                        entries.append("\n".join(current))
+                    current = [line]
+                else:
+                    # only add continuation if we have started an entry
+                    if current is not None:
+                        current.append(line)
+            if current:
+                entries.append("\n".join(current))
             return entries
         except Exception as e:
             attempt += 1
@@ -65,28 +72,32 @@ def _fetch_nbib_batch(pmids, retries=3, delay=2.0):
             time.sleep(delay)
     raise RuntimeError(f"Failed to fetch NBIB for PMIDs {pmids[:1]} after {retries} retries")
 
+
 def _parse_nbib_entry(entry: str) -> dict[str, list[str]]:
     """
     Parse a single NBIB entry block into a dict of tag -> [values].
+    Handles multi-line continuations indented by spaces.
     """
     fields: dict[str, list[str]] = {}
     current = None
     for line in entry.splitlines():
-        if not line.strip(): 
+        if not line.strip():
             continue
-        m = re.match(r"^([A-Z0-9]{2,4})- (.*)$", line)
-        if m:
-            tag, val = m.group(1), m.group(2).strip()
+        parts = line.split("- ", 1)
+        if len(parts) == 2 and len(parts[0]) <= 4:
+            tag, val = parts[0], parts[1].strip()
             fields.setdefault(tag, []).append(val)
             current = tag
         elif line.startswith("    ") and current:
             fields[current][-1] += " " + line.strip()
     return fields
 
+
 def pubmed_search(query: str, cap: int = 5000) -> pd.DataFrame:
     """
-    Fetch up to `cap` PubMed records for `query`. Returns a DataFrame
-    with top‑level columns plus a full `nbib_fields` dict.
+    Fetch up to `cap` PubMed records for `query`. Returns a DataFrame with:
+      - top‑level: pmid, doi, pmc, title, abstract, journal, year, authors, keywords
+      - nbib_fields: dict of *all* raw NBIB tags per record
     """
     Entrez.email = settings.ncbi_email
 
@@ -107,13 +118,13 @@ def pubmed_search(query: str, cap: int = 5000) -> pd.DataFrame:
     for i in range(0, len(pmids), batch_size):
         batch = pmids[i : i + batch_size]
 
-        # fetch medline + nbib in parallel
+        # fetch metadata + nbib together
         med_records = _fetch_medline_batch(batch)
         nbib_entries = _fetch_nbib_batch(batch)
 
         if len(nbib_entries) != len(med_records):
             logging.warning(
-                "Batch size mismatch: %d Medline vs %d NBIB entries",
+                "Batch mismatch: %d Medline vs %d NBIB entries",
                 len(med_records), len(nbib_entries)
             )
 
@@ -121,7 +132,7 @@ def pubmed_search(query: str, cap: int = 5000) -> pd.DataFrame:
             pmid        = rec.get("PMID", "")
             nbib_fields = _parse_nbib_entry(nbib)
 
-            # top‑level convenience fields
+            # convenience fields
             title    = " ".join(rec.get("TI","").splitlines())
             abstract = " ".join(rec.get("AB","").splitlines())
             journal  = rec.get("JT","")
@@ -130,16 +141,16 @@ def pubmed_search(query: str, cap: int = 5000) -> pd.DataFrame:
             keywords = rec.get("MH",[])
 
             # DOI
-            doi = next((aid.split()[0] for aid in rec.get("AID",[]) if aid.endswith("[doi]")), None)
+            doi = next((a.split()[0] for a in rec.get("AID",[]) if a.endswith("[doi]")), None)
             if not doi:
                 for val in nbib_fields.get("LID",[]):
                     if "doi" in val.lower():
-                        doi = val.split()[0]; break
+                        doi = val.split()[0]
+                        break
 
             # PMC
-            pmc = None
-            for val in nbib_fields.get("PMC",[]):
-                pmc = val.strip(); break
+            pmc_list = nbib_fields.get("PMC", [])
+            pmc = pmc_list[0] if pmc_list else None
 
             rows.append({
                 "pmid": pmid,
@@ -158,10 +169,12 @@ def pubmed_search(query: str, cap: int = 5000) -> pd.DataFrame:
 
     return pd.DataFrame(rows)
 
+
 def collect(queries: list[str]) -> pd.DataFrame:
     """
-    Run pubmed_search for each query, concatenate, drop duplicate PMIDs.
+    Run pubmed_search for each query, concatenate results,
+    and drop duplicate PMIDs.
     """
-    df_list = [pubmed_search(q) for q in queries]
-    df = pd.concat(df_list, ignore_index=True)
+    dfs = [pubmed_search(q) for q in queries]
+    df = pd.concat(dfs, ignore_index=True)
     return df.drop_duplicates(subset="pmid")
