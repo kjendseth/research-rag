@@ -1,6 +1,5 @@
 # agents/indexer.py
 
-import os
 import io
 import json
 import hashlib
@@ -10,21 +9,16 @@ from config import settings
 
 client = openai.OpenAI(api_key=settings.openai_api_key)
 
-# keep a manifest of seen PMIDs so we ingest incrementally
 _ABSTRACT_MANIFEST = ".abstract_manifest.json"
 _PDF_MANIFEST      = ".pdf_manifest.json"
 
 def index_abstracts(df, vstore_id: str):
     """
-    Incrementally upload each abstract as its own vector-store file,
-    attaching metadata attributes so searches return DOI/title/etc.
+    Incrementally upload each abstract as its own vector‑store file,
+    serializing list attributes into strings.
     """
-    # load or init manifest of PMIDs
-    mpath = Path(_ABSTRACT_MANIFEST)
-    if mpath.exists():
-        seen = set(json.loads(mpath.read_text()))
-    else:
-        seen = set()
+    manifest_path = Path(_ABSTRACT_MANIFEST)
+    seen = set(json.loads(manifest_path.read_text())) if manifest_path.exists() else set()
 
     new_count = 0
     for row in df.itertuples():
@@ -32,29 +26,29 @@ def index_abstracts(df, vstore_id: str):
         if not pmid or pmid in seen:
             continue
 
-        # build metadata attributes
+        # Serialize list fields into strings
+        authors_str  = "; ".join(row.authors or [])
+        keywords_str = "; ".join(row.keywords or [])
+
         attrs = {
             "pmid":    pmid,
-            "doi":     row.doi or "",
+            "doi":     row.doi   or "",
             "pmc":     getattr(row, "pmc", "") or "",
             "title":   row.title or "",
             "journal": row.journal or "",
             "year":    str(row.year or ""),
-            "authors": row.authors or [],
-            "keywords": row.keywords or []
+            "authors": authors_str,
+            "keywords": keywords_str
         }
 
-        # prepare the text payload
-        payload = json.dumps({
-            "text": f"{row.title}\n\n{row.abstract}"
-        }).encode("utf-8")
+        # Build the payload
+        payload = json.dumps({"text": f"{row.title}\n\n{row.abstract}"}).encode("utf-8")
         buf = io.BytesIO(payload)
         buf.name = f"{pmid}.json"
 
-        # upload file
+        # Upload file
         f = client.files.create(file=buf, purpose="user_data")
-
-        # attach to vector store with metadata
+        # Attach to vector store with serialized attributes
         client.vector_stores.files.create(
             vector_store_id=vstore_id,
             file_id=f.id,
@@ -64,19 +58,17 @@ def index_abstracts(df, vstore_id: str):
         seen.add(pmid)
         new_count += 1
 
-    # update manifest
-    mpath.write_text(json.dumps(sorted(seen)))
-
+    # Save updated manifest
+    manifest_path.write_text(json.dumps(sorted(seen)))
     print(f"＋ Indexed {new_count} new abstracts into {vstore_id}")
 
 def index_pdf(pdf_path: str, vstore_id: str):
     """
-    Upload a PDF to the vector store, skipping duplicates by SHA‑256.
-    Stores each PDF’s DOI (from filename) as metadata.
+    Upload a PDF to the vector store, skipping duplicates by SHA‑256,
+    attaching DOI in metadata.
     """
     sha = hashlib.sha256(Path(pdf_path).read_bytes()).hexdigest()
 
-    # load or init PDF manifest
     pm = Path(_PDF_MANIFEST)
     manifest = json.loads(pm.read_text()) if pm.exists() else {}
 
@@ -85,7 +77,7 @@ def index_pdf(pdf_path: str, vstore_id: str):
         print(f"→ Skipping duplicate PDF: {pdf_path}")
         return
 
-    # upload PDF
+    # Upload PDF
     with open(pdf_path, "rb") as fbin:
         f = client.files.create(file=fbin, purpose="user_data")
 
@@ -97,7 +89,7 @@ def index_pdf(pdf_path: str, vstore_id: str):
     )
     print(f"＋ Indexed PDF {pdf_path} into {vstore_id}")
 
-    # update manifest
+    # Update PDF manifest
     seen.add(sha)
     manifest[vstore_id] = list(seen)
     pm.write_text(json.dumps(manifest))
