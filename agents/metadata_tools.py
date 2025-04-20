@@ -10,17 +10,17 @@ def semantic_search(vector_store_id: str, query: str, limit: int = 100) -> list[
     Return up to `limit` papers whose abstract/title matches `query` semantically.
     Each dict has keys: doi, pmid, title, snippet.
     """
-    # 1) Embed the query
+    # 1) embed the query
     emb_resp = client.embeddings.create(
         model=settings.embedding_model,
         input=[query]
     )
     emb = emb_resp.data[0].embedding
 
-    # 2) Vector search using the correct 'embedding' argument
+    # 2) vector search — note: use `vector=` here
     resp = client.vector_stores.search(
         vector_store_id=vector_store_id,
-        embedding=emb,
+        vector=emb,
         limit=limit
     )
 
@@ -30,9 +30,9 @@ def semantic_search(vector_store_id: str, query: str, limit: int = 100) -> list[
         text = hit.document or ""
         snippet = text[:200].replace("\n", " ")
         results.append({
-            "doi": meta.get("doi"),
-            "pmid": meta.get("pmid"),
-            "title": meta.get("title"),
+            "doi":    meta.get("doi"),
+            "pmid":   meta.get("pmid"),
+            "title":  meta.get("title"),
             "snippet": snippet
         })
     return results
@@ -48,8 +48,8 @@ def search_by_author(vector_store_id: str, author_substr: str, limit: int = 1000
     )
     return [
         {
-            "doi": hit.metadata.get("doi"),
-            "pmid": hit.metadata.get("pmid"),
+            "doi":   hit.metadata.get("doi"),
+            "pmid":  hit.metadata.get("pmid"),
             "title": hit.metadata.get("title")
         }
         for hit in resp.data
@@ -66,8 +66,8 @@ def search_by_pmc(vector_store_id: str, limit: int = 1000) -> list[dict]:
     )
     return [
         {
-            "doi": hit.metadata.get("doi"),
-            "pmid": hit.metadata.get("pmid"),
+            "doi":   hit.metadata.get("doi"),
+            "pmid":  hit.metadata.get("pmid"),
             "title": hit.metadata.get("title")
         }
         for hit in resp.data
